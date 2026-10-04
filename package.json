@@ -1,7 +1,7 @@
 {
   "name": "meta-scheduler",
-  "version": "1.1.0",
-  "description": "Made by Antonio Automates and Claude to help you get your time back. Schedule Instagram + Facebook Page carousel posts AND video Reels to Meta Business Suite via Playwright. Multi-account, batchable, no Meta Graph API required.",
+  "version": "1.2.0",
+  "description": "Georgia Wood Tools fork: guarded Facebook scheduling and offline CRM inventory planning. Live publishing disabled pending verification.",
   "type": "module",
   "bin": {
     "meta-scheduler": "schedule-post.js",
@@ -10,9 +10,19 @@
   "scripts": {
     "setup": "node schedule-post.js --setup",
     "schedule": "node schedule-post.js",
-    "batch": "node batch-schedule.js"
+    "batch": "node batch-schedule.js",
+    "test": "node --test lib/*.test.js",
+    "plan:inventory": "node inventory-sync.js"
   },
-  "keywords": ["meta", "instagram", "facebook", "scheduler", "playwright", "automation", "carousel"],
+  "keywords": [
+    "meta",
+    "instagram",
+    "facebook",
+    "scheduler",
+    "playwright",
+    "automation",
+    "carousel"
+  ],
   "author": {
     "name": "Antonio Automates",
     "url": "https://antonioautomates.com"
@@ -20,11 +30,11 @@
   "homepage": "https://antonioautomates.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/arillera/meta-scheduler.git"
+    "url": "https://github.com/jimbrown876/meta-scheduler.git"
   },
-  "bugs": "https://github.com/arillera/meta-scheduler/issues",
+  "bugs": "https://github.com/jimbrown876/meta-scheduler/issues",
   "license": "MIT",
   "dependencies": {
-    "playwright": "^1.59.1"
+    "playwright": "1.59.1"
   }
 }

@@ -2,8 +2,10 @@
 // meta-scheduler — Made by Antonio Automates and Claude to help you get your time back.
 // MIT licensed. See LICENSE.
 
-import { chromium } from 'playwright';
-import { readFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { validateDatetime, assertAccount, ensureFacebookDestination, scheduleAndVerify, validateReceipt } from './lib/publishing-guards.js';
+import { readState, writeState, withLock } from './lib/durable-state.js';
+import { jobFingerprint } from './lib/job.js';
+import { readFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -21,19 +23,13 @@ const { values } = parseArgs({
     'caption-start-line': { type: 'string' },
     datetime:   { type: 'string' },
     page:       { type: 'string' },
+    'job-id':   { type: 'string' },
     setup:      { type: 'boolean', default: false },
     'dry-run':  { type: 'boolean', default: false },
     headless:   { type: 'boolean', default: false },
     help:       { type: 'boolean', default: false },
   },
 });
-
-const account = loadAccount(values.account);
-const config = {
-  pageName: values.page || account.pageName,
-  composerUrl: account.composerUrl,
-  businessSuiteUrl: account.businessSuiteUrl,
-};
 
 if (values.help || (!values.setup && (!values.day && !values.images))) {
   console.log(`
@@ -44,28 +40,32 @@ Usage:
   node schedule-post.js --account <name> --day NN --datetime "YYYY-MM-DD HH:MM" [--dry-run]
       Schedule Day-NN. Asset paths come from accounts/<name>.json.
 
-  node schedule-post.js --account <name> --images <dir> --caption <file> --datetime <ISO> [--dry-run]
+  node schedule-post.js --account <name> --images <dir> --caption <file> --datetime "YYYY-MM-DD HH:MM" [--dry-run]
       Manual mode for ad-hoc posts.
 
 Flags:
   --account NAME           Account config from accounts/<NAME>.json (or set META_SCHEDULER_ACCOUNT env var).
   --caption-start-line N   Override caption-start-line for this run.
-  --page "Name"            Override Page name for this run.
-  --dry-run                Do everything except click Schedule.
+  --page "Name"            Assert the configured Page name; cannot switch accounts.
+  --dry-run                Validate locally without opening a browser or writing state.
+  --job-id ID              Stable identifier required for live scheduling.
   --headless               Run without a visible browser window.
   --help                   Print this help.
 `);
   process.exit(0);
 }
 
+const account = loadAccount(values.account);
+const config = {
+  pageName: values.page || account.pageName,
+  composerUrl: account.composerUrl,
+  businessSuiteUrl: account.businessSuiteUrl,
+};
+
+process.env.TZ = account.timezone;
+if (values.page && values.page !== account.pageName) throw new Error('Page overrides must match the account.');
 const profileDir = account.profileDir;
 const screenshotsDir = account.screenshotsDir;
-
-// Clean stale lock files left by crashed prior runs (otherwise Chromium aborts on startup).
-for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-  const p = join(profileDir, lock);
-  try { if (existsSync(p)) unlinkSync(p); } catch {}
-}
 
 function resolveFromDay(dayStr) {
   const { imagesDir, captionFile } = dayPaths(account, dayStr);
@@ -103,22 +103,9 @@ function listMedia(dir) {
   throw new Error(`No images (.png/.jpg) or videos (.mp4/.mov) found in ${dir}`);
 }
 
-function validateDatetime(s) {
-  // Accept "YYYY-MM-DD HH:MM" in local time
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
-  if (!m) throw new Error(`--datetime must be "YYYY-MM-DD HH:MM" (got "${s}")`);
-  const [, Y, M, D, h, mn] = m.map(Number);
-  const target = new Date(Y, M - 1, D, h, mn, 0, 0);
-  const now = new Date();
-  const minMs = 20 * 60 * 1000;
-  const maxMs = 29 * 24 * 60 * 60 * 1000;
-  const delta = target - now;
-  if (delta < minMs) throw new Error(`Scheduled time must be ≥20 minutes from now (got ${(delta / 60000).toFixed(1)} min).`);
-  if (delta > maxMs) throw new Error(`Scheduled time must be ≤29 days from now.`);
-  return { date: target, dayInt: D, monthInt: M, yearInt: Y, hourInt: h, minuteInt: mn };
-}
-
 async function setup() {
+  assertAccount(account, { live: true });
+  const { chromium } = await import('playwright');
   console.log(`[setup] Launching browser with profile at ${profileDir}`);
   const ctx = await chromium.launchPersistentContext(profileDir, {
     headless: false,
@@ -337,23 +324,6 @@ async function uploadVideo(page, videoPath) {
   // Initial wait so the upload has a chance to start before we begin polling.
   await page.waitForTimeout(5000);
   console.log('[upload] (Will poll for Share-tab readiness during setReelSchedule.)');
-}
-
-async function ensurePostToChecked(page) {
-  // Look for checkboxes labelled with the page name and Instagram.
-  // Don't fail hard — just log what we see.
-  const checkboxes = page.getByRole('checkbox');
-  const n = await checkboxes.count();
-  console.log(`[post-to] Found ${n} checkboxes; verifying both FB + IG are checked.`);
-  for (let i = 0; i < n; i++) {
-    const cb = checkboxes.nth(i);
-    const label = (await cb.getAttribute('aria-label').catch(() => '')) || '';
-    const checked = await cb.isChecked().catch(() => null);
-    if (/facebook|instagram/i.test(label) && checked === false) {
-      console.log(`[post-to] checking: ${label}`);
-      await cb.check().catch(() => {});
-    }
-  }
 }
 
 async function probeScheduleRegion(page) {
@@ -606,19 +576,6 @@ async function setReelSchedule(page, dt) {
   await page.waitForTimeout(800);
 }
 
-async function clickSchedule(page, kind) {
-  if (kind === 'reel') {
-    // Reels have TWO "Schedule"s: the pill (already clicked) and the bottom-right button.
-    // Pill comes first in document order; the bottom commit button is .last().
-    const btn = page.locator('div[role="button"]', { hasText: /^Schedule$/ }).last();
-    await btn.click({ force: true });
-  } else {
-    const btn = page.getByRole('button', { name: /^schedule$/i }).first();
-    await btn.click();
-  }
-  await page.waitForTimeout(2500);
-}
-
 async function run() {
   if (values.setup) {
     await setup();
@@ -628,6 +585,7 @@ async function run() {
   const { day, images, caption: captionArg, datetime } = values;
   if (!datetime) throw new Error('--datetime is required.');
   const dt = validateDatetime(datetime);
+  assertAccount(account, { live: !values['dry-run'] });
 
   let imagesDir, captionFile;
   if (day) {
@@ -640,10 +598,32 @@ async function run() {
   if (!existsSync(captionFile)) throw new Error(`Caption file not found: ${captionFile}`);
 
   const captionStartLine = values['caption-start-line']
-    ? parseInt(values['caption-start-line'], 10)
+    ? Number(values['caption-start-line'])
     : (account.captionStartLine || 5);
   const caption = extractCaption(captionFile, captionStartLine);
   const media = listMedia(imagesDir);
+  if (media.kind !== 'carousel') throw new Error('Reel targeting is not verified in this Facebook-only fork.');
+  if (!caption.trim()) throw new Error('Caption cannot be empty.');
+  const fingerprint = jobFingerprint({ ...values, captionStartLine }, account);
+  if (values['dry-run']) {
+    console.log('META_RESULT ' + JSON.stringify({ status: 'validated', fingerprint }));
+    return;
+  }
+  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(values['job-id'] || '')) throw new Error('--job-id is required for persistent deduplication.');
+  const journalPath = join(__dirname, 'state', account.name + '.posts.json');
+  const journal = readState(journalPath, { version: 1, pageId: account.pageId, jobs: {} });
+  if (journal.version !== 1 || journal.pageId !== account.pageId || !journal.jobs) throw new Error('Invalid post journal.');
+  const jobKey = 'job:' + values['job-id'];
+  const prior = journal.jobs[jobKey];
+  if (prior) {
+    if (prior.fingerprint !== fingerprint || prior.status !== 'scheduled') throw new Error('Existing job changed or has an uncertain outcome. Reconcile before retrying.');
+    validateReceipt(prior.receipt, account.pageId);
+    console.log('META_RESULT ' + JSON.stringify(prior));
+    return;
+  }
+  const { chromium } = await import('playwright');
+  mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+  mkdirSync(screenshotsDir, { recursive: true, mode: 0o700 });
 
   console.log(`
 [plan]
@@ -679,6 +659,7 @@ async function run() {
     console.log(`[nav] URL after load: ${page.url()}`);
     console.log(`[nav] Snapshot: ${navShot}`);
 
+    await ensureFacebookDestination(page, account);
     console.log('[caption] Pasting caption…');
     await pasteCaption(page, caption);
 
@@ -689,7 +670,7 @@ async function run() {
       await uploadSlides(page, media.paths);
       console.log('[upload] Waiting for thumbnails to finalize…');
       await page.waitForTimeout(8000);
-      await ensurePostToChecked(page);
+      await ensureFacebookDestination(page, account);
       await setSchedule(page, dt);
     }
 
@@ -698,16 +679,16 @@ async function run() {
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`[screenshot] ${screenshotPath}`);
 
-    if (values['dry-run']) {
-      console.log('[dry-run] Stopping before Schedule click. Inspect the browser, then close.');
-      await ctx.waitForEvent('close', { timeout: 0 });
-      return;
-    }
-
-    console.log('[schedule] Clicking Schedule…');
-    await clickSchedule(page, media.kind);
+    console.log('[schedule] Submitting and verifying the receipt…');
+    const receipt = await scheduleAndVerify(page, account, async () => {
+      journal.jobs[jobKey] = { status: 'uncertain', fingerprint };
+      writeState(journalPath, journal);
+    });
+    journal.jobs[jobKey] = { status: 'scheduled', fingerprint, receipt };
+    writeState(journalPath, journal);
+    console.log('META_RESULT ' + JSON.stringify(journal.jobs[jobKey]));
     const after = join(screenshotsDir, `${day ? `day-${String(day).padStart(2, '0')}` : 'manual'}-${stamp}-after.png`);
-    await page.screenshot({ path: after, fullPage: true });
+    await page.screenshot({ path: after, fullPage: true }).catch(() => {});
     console.log(`[done] Post-schedule screenshot: ${after}`);
   } catch (err) {
     const errPath = join(screenshotsDir, `error-${Date.now()}.png`);
@@ -716,11 +697,11 @@ async function run() {
     console.error(`[error] Screenshot: ${errPath}`);
     throw err;
   } finally {
-    if (!values['dry-run']) await ctx.close();
+    await ctx.close().catch(() => {});
   }
 }
 
-run().catch((e) => {
+(values['dry-run'] ? run() : withLock(join(__dirname, 'state', account.name + '.profile.lock'), run)).catch((e) => {
   console.error(e);
   process.exit(1);
 });
