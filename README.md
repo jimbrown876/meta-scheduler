@@ -1,191 +1,76 @@
-# meta-scheduler
+# Georgia Wood Tools scheduler fork
 
-> Made by [Antonio Automates](https://antonioautomates.com) and Claude to help you get your time back.
+Fork of [Antonio Automates' meta-scheduler](https://github.com/arillera/meta-scheduler), retaining its MIT license and attribution. This branch hardens the scheduler and adds an offline inventory synchronization core for Georgia Wood Tools.
 
-Schedule Instagram + Facebook Page **carousel posts** AND **Reels (video posts)** to **Meta Business Suite** without:
+**Live Georgia Wood Tools publishing is disabled.** The lifecycle tests use a fake publishing adapter and the browser tests serve synthetic HTML. This is not proof of working Facebook automation. No live CRM reader or Facebook create/edit/delete adapter is bundled. Do not activate this as a workaround for an account restriction or claim it is connected to the CRM.
 
-- Writing 30 posts by hand in the composer
-- Logging into the Graph API (no business verification, no app approval, no tokens)
-- Trusting that uploading 5 slides at once will preserve their order (it doesn't)
+## What changed
 
-Multi-account, batchable, Node.js + Playwright. Local-only — your Meta login lives in a Chromium profile on your machine and never leaves.
+- A dry run validates local input without opening a browser, publishing or recording completion.
+- Stable job IDs bind Page identity, content, media, schedule and timezone. Changed completed jobs cannot silently become duplicates.
+- An atomic private journal records intent before the Schedule click. A missing or ambiguous receipt stops retries and requires reconciliation.
+- Publishing requires one exact configured Facebook destination. Other Facebook and Instagram selections are cleared and verified. Restrictions, sign-in redirects and challenges stop execution.
+- Calendar rollover and ambiguous/nonexistent DST times are rejected. The account timezone controls input interpretation.
+- The inventory core creates direct machine links ending in `#inquire`, updates the same post after a change, marks sold/reserved in its caption, and deletes only on an explicit removal instruction.
+- Missing listings never imply deletion. Operator holds and newer revisions block stale work. A sold latch survives hiding/deleting until an explicit reopen.
+- The installer no longer changes another checkout, installs a skill, removes locks or initiates account setup automatically.
 
----
+The remaining image composer helpers come from upstream and have not been verified against the current live Meta UI. Reels and Instagram are disabled in this fork. A receipt validator checks configured Page identity and canonical post URLs; a production adapter must additionally read back the real owner, status, content and destination from Meta. A URL parameter alone is not evidence of post ownership.
 
-## What it does
+## Local tests
 
-Drives a Playwright-managed Chromium through Meta's web composer at `https://business.facebook.com/latest/composer/` to create a scheduled post on both Instagram and the linked Facebook Page.
+See [INSTALL.md](INSTALL.md). Use Node 22 or newer:
 
-**Auto-detects the post type** based on what's in the folder you point it at:
-
-- Folder contains image files (`.png`, `.jpg`) → **carousel post**.
-  1. Paste caption
-  2. Upload each slide one at a time (preserves order deterministically)
-  3. Set date + time on both rows
-  4. Click Schedule
-- Folder contains a single video file (`.mp4`, `.mov`, `.m4v`, `.webm`) → **Reel post**.
-  1. Paste caption
-  2. Upload video → wait for Meta processing
-  3. Click Share tab → click Schedule pill
-  4. Set date + time on both rows
-  5. Click Schedule
-
-Use the **batch** entry point to schedule many posts in one go (range mode for daily campaigns, JSON-plan mode for arbitrary timing). State is persisted, so a partial run can resume; failed posts can be retried in isolation. Same batch logic works for carousels and Reels — each post's type is detected from its folder.
-
-## Prerequisites
-
-- macOS (the file-picker bypass is tested here; Linux/Windows likely work but untested)
-- Node.js ≥ 18
-- A Meta Business Suite account with admin access on the Page you want to post to, and a linked Instagram Business/Creator account if you're posting to IG
-
-## Quick start
-
-```bash
-git clone <this-repo>            # or unzip the folder
-cd meta-scheduler
-npm install
-npx playwright install chromium  # ~92 MB, one time
+```sh
+npm ci --ignore-scripts
+npx playwright install chromium
+npm test
 ```
 
-Create your account file (copy and edit):
+Tests cover dry runs, invalid snapshots, exact destination selection, post receipts, duplicate prevention, changed content, create/update/reserve/sell/delete/reopen, stale revisions, retained holds, corrupt state, concurrent locks, interrupted writes and reconciliation. Browser fixtures intercept all page requests and never use a signed-in profile.
 
-```bash
-cp accounts/example.json accounts/myaccount.json
-$EDITOR accounts/myaccount.json
+## Offline inventory plan
+
+```sh
+node inventory-sync.js --snapshot effective-crm-snapshot.json --tenant VERIFIED_TENANT_ID
 ```
 
-In `accounts/myaccount.json`:
+The CLI only plans; it cannot publish. `lib/gwt-config.js` records the public Georgia Wood Tools destination and defaults `liveEnabled` to false. Its Page asset ID must be reverified before any activation.
 
-- `name` — short identifier (lowercase-dashed). This becomes the profile dir + state-file name.
-- `displayName` — friendly label, only used in logs.
-- `pageName` — exact label that appears in Meta's "Post to" picker. Must match.
-- `carouselsRoot` — path to the folder containing your post assets, relative to the project root.
-- `imagesSubpath`, `captionSubpath` — patterns with `{day}` placeholder.
-- `captionStartLine` — line number where the actual post copy begins (everything before is preamble).
-
-Log in once:
-
-```bash
-node schedule-post.js --account myaccount --setup
-```
-
-A Chromium window opens. Log into Meta, confirm the correct business is active in the top-left switcher, close the window. Login persists for all future runs.
-
-## Schedule a single post
-
-```bash
-# Carousel (folder of slides)
-node schedule-post.js --account myaccount \
-  --images "/abs/path/to/slides-folder" \
-  --caption "/abs/path/to/caption.md" \
-  --datetime "2026-05-10 09:00"
-
-# Reel (folder with one video)
-node schedule-post.js --account myaccount \
-  --images "/abs/path/to/folder-with-one-mp4" \
-  --caption "/abs/path/to/caption.md" \
-  --datetime "2026-05-10 09:00"
-
-# Day-NN convention from your account config
-node schedule-post.js --account myaccount \
-  --day 01 --datetime "2026-05-10 09:00"
-
-# Dry-run = does everything except clicking Schedule, leaves browser open for inspection
-node schedule-post.js --account myaccount \
-  --day 01 --datetime "2026-05-10 09:00" --dry-run
-```
-
-The `--images` flag points at a folder. The folder's contents determine the post type:
-- **All images** → carousel (multiple slides, alphabetical order)
-- **One video file** → Reel
-- Mixing images + videos in one folder is rejected.
-
-The `--day NN` form resolves the folder + caption from `carouselsRoot` using `imagesSubpath` and `captionSubpath` in your account config.
-
-## Batch — daily campaign
-
-```bash
-# Range mode: schedule 28 posts, one per day, all at 9:00 AM local.
-node batch-schedule.js --account myaccount \
-  --from 1 --to 28 --start-date 2026-05-10 --time 09:00
-
-# Resume from where the last run left off (skips posts already marked completed).
-node batch-schedule.js --account myaccount \
-  --from 1 --to 28 --start-date 2026-05-10 --time 09:00 --resume
-
-# Re-attempt only the posts that failed on the previous batch.
-node batch-schedule.js --account myaccount \
-  --from 1 --to 28 --start-date 2026-05-10 --time 09:00 --retry-failed
-```
-
-State lives at `state/<account>.batch-state.json`. Each entry has `status` (`pending` / `in_progress` / `completed` / `failed`), attempt count, and last error.
-
-## Batch — arbitrary plan
-
-```bash
-node batch-schedule.js --account myaccount --plan ./my-plan.json
-```
+Snapshot input is an **adapter contract**, not the current CRM API response format:
 
 ```json
-[
-  { "day": "01", "datetime": "2026-05-10 09:00" },
-  { "day": "02", "datetime": "2026-05-11 09:00" },
-  { "id": "ad-hoc-launch",
-    "images": "/abs/path/to/launch-slides",
-    "caption": "/abs/path/to/launch-caption.md",
-    "captionStartLine": 5,
-    "datetime": "2026-05-12 17:30" }
-]
+{
+  "version": 1,
+  "source": "crm",
+  "tenantId": "VERIFIED_TENANT_ID",
+  "items": [{
+    "id": "machine_123",
+    "revision": 1,
+    "status": "available",
+    "title": "Example machine",
+    "description": "Effective, operator-approved machine details",
+    "price": "$1,000",
+    "url": "https://georgiawoodtools.com/equipment/machine_123/example-machine"
+  }]
+}
 ```
 
-## Caption file format
+Revisions must increase whenever effective content, status or controls change. A future CRM adapter must establish this monotonic ordering; it cannot reinterpret a hash as an ordered revision. IDs, titles, prices and URLs must come from the effective CRM record, including operator overrides. Supported statuses: available, reserved, sold, hidden, removed, draft. Controls: `hold`, `suppressed`, `removeFromFacebook`, `saleReopened` (booleans). Absence from a snapshot is not a deletion instruction.
 
-```
-# Some heading you don't want posted
+An enabled adapter implements `verifyDestination(url, id)`, `create(operation)`, `update(operation)` and `delete(operation)`. Each mutation must return independently verified `pageId`, `postId`, canonical `url`, `verified: true`, exact `action`, `operationId` and `contentHash`. Updates/deletions must preserve the original post identity. Persisted uncertain operations are reconciled with `reconcileReceipt`; they are never blindly retried. State files must survive restarts, remain private and be backed up. Do not delete them to get past an error.
 
-## Caption (copy/paste into Instagram)
+## Legacy image scheduling interface
 
-Your real caption starts on line 5 (default). Multiple paragraphs OK.
+Copy `accounts/example.json` to a private ignored account file and replace every fixture value with verified values. The example is disabled. Required fields include exact Page ID, Page name, Facebook-only platform list, timezone, composer URL, destination group/checkbox labels and success text/link labels. These labels are fixture examples, not a claim about Meta's current UI.
 
-#hashtags #here #also #fine
-
----
-
-## Anything below the --- separator is ignored
-- [ ] Like this checklist
+```sh
+node schedule-post.js --account example --images /path/to/images --caption /path/to/caption.txt --caption-start-line 1 --datetime "2026-10-10 09:00" --dry-run
+node batch-schedule.js --account example --plan plan.json --dry-run
 ```
 
-The script reads from `captionStartLine` (default 5) until the first line that's exactly `---`, then trims trailing blank lines.
+Batch plans are arrays with unique `id`, `datetime`, and either `day` or `images` plus `caption`; `captionStartLine` is optional. The CLI automatically resumes confirmed identical work. Range generation, unbounded retries and implicit cross-posting are removed. Existing upstream batch state is rejected for explicit reconciliation rather than migrated into an assumed success.
 
-## Why one slide at a time
+## Activation still required
 
-When you call Meta's media uploader with all 5 slides at once, Meta orders them by **upload-completion** time, not by selection order. With similarly-sized PNGs, that's a race. The script uploads sequentially, waiting briefly between each, so the carousel always reads slide-1 → slide-N regardless of file size.
-
-## How auth works (and what you give the script)
-
-You give the script a **persistent Chromium profile dir** at `~/Library/Application Support/playwright-meta-scheduler/<account>/`. That dir holds Meta's login cookies after `--setup`. There are no API keys, no tokens stored anywhere else. Profile dirs are not portable across machines — each machine logs in once.
-
-## Known caveats
-
-- **Date default is unreliable.** Meta defaults the schedule date to "today" or "tomorrow" depending on time of day. Always pass `--datetime` and let the script type the date explicitly.
-- **Selectors are accessibility-based** (roles + aria-labels), not CSS-class-based, so they survive most cosmetic Meta redesigns. If a label rename ships ("Upload from desktop" → "Upload from this device"), the relevant locator strings are in `schedule-post.js` and easy to grep.
-- **One run at a time per account** — Chromium can't open the same profile twice. The script clears `SingletonLock` on startup to recover from prior crashes, but you cannot run two batches against the same account concurrently. (Different accounts can run in parallel, since each has its own profile dir.)
-
-## Use as a Claude Code skill
-
-A `skill/SKILL.md` is included so Claude Code users can install this as a skill. Drop the project folder somewhere stable (e.g. `~/code/meta-scheduler`), then symlink the skill:
-
-```bash
-mkdir -p ~/.claude/skills
-ln -s ~/code/meta-scheduler/skill ~/.claude/skills/meta-scheduler
-```
-
-Now in Claude Code, asking *"schedule these 30 carousel posts to my Meta account"* will trigger the skill and Claude will guide you through the rest.
-
-## License
-
-MIT — see `LICENSE`.
-
----
-
-Built by [Antonio Automates](https://antonioautomates.com). If this saved you hours, the rest of what we build over there probably will too.
+Before a live integration, verify permitted access to this exact Page; implement a scoped effective-CRM snapshot adapter and a read-back-verified Meta lifecycle adapter; verify each machine page and inquiry form; then perform an explicitly authorized canary create/edit/sold/remove sequence and verify a scheduled run. Never change accounts, copy browser cookies, remove another process's locks or bypass verification/restrictions to make a test pass. Keep live mode off until these requirements are met.
