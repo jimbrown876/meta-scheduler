@@ -4,4 +4,4 @@ Use a reviewed checkout of `jimbrown876/meta-scheduler` on a dedicated task bran
 
 Run `npm ci --ignore-scripts`, install the test browser with `npx playwright install chromium`, then run `npm test`. On Linux CI, `npx playwright install --with-deps chromium` supplies browser dependencies. A local fixture run can use an already installed browser executable through `META_TEST_BROWSER`; it launches a fresh temporary profile, never the user's browser profile.
 
-See README.md for the exact limitations and input contracts. Do not invoke `--setup` or enable live publishing until access and the destination are verified. No live CRM/Meta lifecycle adapter is provided by this version. Do not store credentials, cookies, account state or private inventory snapshots in Git.
+See README.md for the worker configuration and live-verification limitations. Do not invoke `--setup` or enable live publishing until access and the destination are verified. The current adapter uses the effective public CRM catalog and the observed Meta Business Suite Page composer. Do not store credentials, cookies, account state or private inventory snapshots in Git.
