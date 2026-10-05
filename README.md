@@ -2,7 +2,41 @@
 
 Fork of [Antonio Automates' meta-scheduler](https://github.com/arillera/meta-scheduler), retaining its MIT license and attribution. This branch hardens the scheduler and adds an offline inventory synchronization core for Georgia Wood Tools.
 
-**Live Georgia Wood Tools publishing is disabled pending VPS login and live canary verification.** This version adds a read-only effective CRM catalog reader, a Meta Business Suite Page create/edit adapter, and an n8n workflow generator. The browser lifecycle tests serve synthetic HTML modeled on the observed UI; passing them does not prove live Facebook posting. The worker stops on login, verification, restrictions, destination mismatch, or uncertain outcomes.
+**Desktop Chrome is the selected publishing path. Live publishing stays disabled until the browser connection and live canary are verified.** VPS-only Facebook login is deferred: code delivery failed there while the existing Mac session worked; the underlying cause has not been established. The worker uses the effective CRM catalog and the Meta Business Suite Page composer. Synthetic browser tests do not prove live Facebook posting.
+
+## Desktop schedule and recovery
+
+n8n retains one durable reconciliation request on the VPS every 15 minutes. A Mac LaunchAgent checks once a minute through the existing private SSH connection. Failed connections wait 1, 5, 15, then 60 minutes between attempts, continuing hourly without expiring pending work. New schedule ticks do not reset that backoff. Sleep, shutdown and Wi-Fi loss delay publication; after the Mac is awake, logged in and connected, it resumes pending work with the latest catalog. It does not replay obsolete available listings that have since sold.
+
+The official Playwright extension connects to the selected, already signed-in Chrome profile. The worker opens and closes its own tab; it does not copy cookies, launch Chrome against the default profile directory, close user tabs, enter passwords or solve challenges. Installation and the persistent connection grant require the user's approval. Keep the extension connection token in a private file on the Mac, outside Git. See the [official extension documentation](https://github.com/microsoft/playwright/blob/main/packages/extension/README.md).
+
+```json
+{
+  "tenantId": "01M41C0XR04Y9DXGAJ9Q52C1E1",
+  "stateDirectory": "/Users/USER/Library/Application Support/Georgia Wood Tools Publisher/state",
+  "browserMode": "extension",
+  "chromeProfileDirectory": "Default",
+  "extensionTokenFile": "/Users/USER/Library/Application Support/Georgia Wood Tools Publisher/extension-token",
+  "queueRelease": "VERIFIED_40_CHARACTER_RELEASE_SHA",
+  "workerId": "gwt-desktop-mac",
+  "liveEnabled": false
+}
+```
+
+Replace the profile name with its verified `Default` or `Profile N` value. State directories must be 0700; configuration and the token file must be 0600. Use an immutable release directory and an absolute Node executable in the generated LaunchAgent. `lib/desktop-launchagent.js` creates its plist; `lib/n8n-desktop-workflow.js` generates the replacement for the existing GWT publisher workflow. The n8n manual branch reads queue status; only the 15-minute clock enqueues work. It cannot itself publish to Facebook.
+
+```sh
+node lib/desktop-runner.js queue --config /absolute/private/config.json
+node lib/desktop-runner.js status --config /absolute/private/config.json
+node lib/desktop-runner.js tick --config /absolute/private/config.json
+node lib/n8n-desktop-workflow.js VERIFIED_40_CHARACTER_RELEASE_SHA
+```
+
+Each run is limited to three writes, prioritizing changes to existing posts. Partial batches remain queued. A lease is checked just before Publish; another worker cannot claim an unexpired lease. The private journal distinguishes preparation from submission, retains verified post identities, and survives restarts. A lost server acknowledgement is retried without posting again. After an uncertain submission, the worker only reads back the exact caption, Page owner and post identity before accepting completion. Delayed readback retries and alerts once after three failures; contradictory results, login, challenges and restrictions pause work for attention. No uncertainty is resolved by another Publish click.
+
+Mac `lockf` and Linux `flock` hold OS advisory locks on permanent private files. A pipe-bound holder releases ownership if its parent crashes; the files themselves are never deleted to force recovery. Fixture tests cover a killed owner, concurrent exclusion, queue backoff, lost acknowledgements, interrupted preparation, sold catch-up and the pinned MCP init-page bridge.
+
+Before activation, reconcile any existing posts for the same machine links, verify the exact Page, then run a scoped live canary and a normal scheduled cycle. A queue-only schedule may be enabled while the Mac publisher stays disabled; this proves retention, not Facebook publishing. Rollback: disable the Mac configuration, unload its named LaunchAgent and deactivate the GWT desktop n8n workflow. Preserve the queue, token and publication journal for recovery. Do not change the independent Marketplace scraper.
 
 ## What changed
 
@@ -17,7 +51,7 @@ Fork of [Antonio Automates' meta-scheduler](https://github.com/arillera/meta-sch
 
 The remaining legacy image composer helpers come from upstream and have not been verified against the current live Meta UI. Reels and Instagram are disabled in this fork. The new Page adapter reads back the published caption, Page owner and canonical permalink from the post's Business Suite insights. A URL parameter alone is not evidence of post ownership.
 
-## Self-hosted worker and n8n
+## Deferred VPS browser worker
 
 Run the worker as the existing `jim` service user, with a private JSON config at `/etc/georgia-wood-tools/publisher.json`:
 
@@ -103,4 +137,4 @@ Batch plans are arrays with unique `id`, `datetime`, and either `day` or `images
 
 ## Activation still required
 
-Before activation, verify permitted VPS access to this exact Page, a scoped canary create/edit/sold sequence and a scheduled run. Deletion remains a separate manual action; the adapter fails closed. Never change accounts, copy browser cookies, remove another process's locks or bypass verification/restrictions to make a test pass. Keep live mode off until these requirements are met.
+Before Facebook activation, verify the selected desktop connection to this exact Page, a scoped canary create/edit/sold sequence and a scheduled run. Deletion remains a separate manual action; the adapter fails closed. Never change accounts, copy browser cookies, remove another process's locks or bypass verification/restrictions to make a test pass. Keep live mode off until these requirements are met.
