@@ -55,6 +55,14 @@ The remaining legacy image composer helpers come from upstream and have not been
 
 GWT posts require an explicit link preview with the machine photograph and its direct website inquiry URL. The adapter attaches that preview in the composer and confirms the image has loaded before clicking Publish. It independently verifies the saved image and destination afterward. Missing images stop the batch; a text-only post cannot be recorded as complete. Existing receipts without image proof are repaired on the same post, even when the CRM revision has not changed. Sold edits retain the same image card and post identity.
 
+## Listing and buyer-path standard
+
+`lib/listing-copy.js` is the shared copy renderer. Facebook listings start with the machine name, public price and an optional location supplied by the effective catalog, followed by factual details, the exact machine inquiry link, availability/pickup confirmation and a follow prompt. Reserved and sold status remain explicit. Sold copy points to current stock instead of soliciting purchase inquiries for the sold machine; the catalog's sold-price visibility rules still apply. Never invent demonstrations, condition claims, warranties, hours, contact details or pickup addresses.
+
+Copy version 2 separates source-fact hashes from rendered copy. A verified legacy record can receive the new wording at the same CRM revision, through an edit of the same post. Changed source facts at an unchanged revision still stop as a conflict. A pending older submission must reconcile with its original caption first; only then can a fresh plan update its copy. Keep journal backups and old releases. The old release does not understand version 2 source hashes, so rollback may hold affected records for explicit reconciliation rather than resume them automatically.
+
+The renderer also prepares an Instagram caption under 2,200 characters, with a clear website-link-in-bio route and the machine URL for copying. **This does not activate Instagram publishing.** That needs a separately verified business account, real image uploads, channel-specific saved-post receipts, sold-edit/retry verification and a normal scheduled run. The existing Facebook-only destination guard remains in force; connecting an Instagram account alone does not enable cross-posting.
+
 ## Deferred VPS browser worker
 
 Run the worker as the existing `jim` service user, with a private JSON config at `/etc/georgia-wood-tools/publisher.json`:
