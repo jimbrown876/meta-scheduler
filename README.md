@@ -38,6 +38,8 @@ Mac `lockf` and Linux `flock` hold OS advisory locks on permanent private files.
 
 Before activation, reconcile any existing posts for the same machine links, verify the exact Page, then run a scoped live canary and a normal scheduled cycle. A queue-only schedule may be enabled while the Mac publisher stays disabled; this proves retention, not Facebook publishing. Rollback: disable the Mac configuration, unload its named LaunchAgent and deactivate the GWT desktop n8n workflow. Preserve the queue, token and publication journal for recovery. Do not change the independent Marketplace scraper.
 
+The one-time `desktop-runner.js canary --config /absolute/private/config.json` command requires a separately approved `canaryEnabled: true` while general `liveEnabled` remains false. It is pinned to the existing labelled GWT test post and its machine, verifies ownership, edits that same post through two test captions and a clearly labelled simulated sold status, and verifies a repeat makes zero writes. Its separate journal prevents simulated status from entering the CRM or the production sold latch. It then adopts the verified post once and restores fresh real CRM copy. It cannot overwrite another production receipt, create a different test post, or run as part of the scheduled queue. Afterward, remove the canary opt-in and separately verify a bounded ordinary creation batch and a normal scheduled cycle before general activation. A canary failure retains its journal for reconciliation; never delete the journal to retry.
+
 ## What changed
 
 - A dry run validates local input without opening a browser, publishing or recording completion.
