@@ -53,6 +53,8 @@ The one-time `desktop-runner.js canary --config /absolute/private/config.json` c
 
 The remaining legacy image composer helpers come from upstream and have not been verified against the current live Meta UI. Reels and Instagram are disabled in this fork. The new Page adapter reads back the published caption, Page owner and canonical permalink from the post's Business Suite insights. A URL parameter alone is not evidence of post ownership.
 
+GWT posts require an explicit link preview with the machine photograph and its direct website inquiry URL. The adapter attaches that preview in the composer and confirms the image has loaded before clicking Publish. It independently verifies the saved image and destination afterward. Missing images stop the batch; a text-only post cannot be recorded as complete. Existing receipts without image proof are repaired on the same post, even when the CRM revision has not changed. Sold edits retain the same image card and post identity.
+
 ## Deferred VPS browser worker
 
 Run the worker as the existing `jim` service user, with a private JSON config at `/etc/georgia-wood-tools/publisher.json`:
